@@ -5,7 +5,8 @@ learning, with a separate referral output for clinical screening.
 
 **Author:** H. A. C. P. Ranasinghe · Coventry index 16110083 · NIBM CoBscComp24.2-030
 **Module:** Computer Vision — Coursework 1
-**Video:** <paste your unlisted YouTube link here>
+**Video:** (https://youtu.be/53lDQrjmcUk)
+**prototype link:** (https://chamodyapiyasarani.github.io/diabetic-retinopathy-detection/)
 
 ## Results
 
