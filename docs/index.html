@@ -533,22 +533,64 @@ async function boot(){
     return;
   }
 
+  // Is the file actually published? Answering this first means a format
+  // problem is never reported as a missing file.
+  let published = false;
   try{
-    status('Loading the trained model…', 'load');
-    model = await tf.loadLayersModel('model/model.json');
-    // A warm-up pass so the first real click is fast.
-    const warm = tf.zeros([1, IMG_SIZE, IMG_SIZE, 3]);
-    const w = model.predict(warm); await w.data(); warm.dispose(); w.dispose();
-    status('Model loaded and running locally in your browser. Ready.', 'live');
-    el('run').disabled = el('rand').disabled = !haveCases;
+    const r = await fetch('model/model.json', {cache: 'no-store'});
+    published = r.ok;
+    if(!r.ok) console.warn('model/model.json responded', r.status);
   }catch(e){
-    status('Model files not found in docs/model/.', 'err');
+    console.warn('model/model.json could not be fetched:', e.message);
+  }
+
+  if(!published){
+    status('model/model.json was not found on this site.', 'err');
     banner('<b>The model has not been published yet.</b> ' +
            'Convert <code>final_model.keras</code> with <code>convert_model.py</code> and ' +
            'commit the result to <code>docs/model/</code>. The page will then classify ' +
            'images live. Everything else on this page already works.');
     el('run').disabled = el('rand').disabled = true;
+    return;
   }
+
+  // The file is there. Try both model formats before giving up.
+  // The first loader is the expected one, so its error is the one worth showing.
+  let firstErr = null;
+  for(const loader of ['loadLayersModel', 'loadGraphModel']){
+    try{
+      status(`Loading the trained model (${loader})…`, 'load');
+      model = await tf[loader]('model/model.json');
+      console.log('model loaded with', loader);
+      break;
+    }catch(e){
+      if(!firstErr) firstErr = e;
+      model = null;
+      console.warn(loader, 'failed:', e.message);
+    }
+  }
+
+  if(!model){
+    const msg = (firstErr && firstErr.message) ? firstErr.message : 'unknown error';
+    status('The model files are published but could not be loaded.', 'err');
+    banner('<b>TensorFlow.js could not load the model.</b> The files are present in ' +
+           '<code>docs/model/</code>, so this is a format problem, not a missing file.' +
+           '<br><br><span style="font-family:ui-monospace,monospace;font-size:12px;' +
+           'word-break:break-word">' + msg.replace(/[<>]/g, '') + '</span>');
+    el('run').disabled = el('rand').disabled = true;
+    return;
+  }
+
+  try{
+    // A warm-up pass so the first real click is fast.
+    const warm = tf.zeros([1, IMG_SIZE, IMG_SIZE, 3]);
+    const w = model.predict(warm); await w.data(); warm.dispose(); w.dispose();
+  }catch(e){
+    console.warn('warm-up pass failed:', e.message);
+  }
+
+  status('Model loaded and running locally in your browser. Ready.', 'live');
+  el('run').disabled = el('rand').disabled = !haveCases;
 }
 
 /* --------------------------------------------------------------- wiring */
