@@ -1,0 +1,590 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Diabetic Retinopathy Stage Detection</title>
+<meta name="description" content="Browser-based diabetic retinopathy severity grading. ResNet50 transfer learning, APTOS 2019.">
+<style>
+  :root{
+    --ink:#151922; --muted:#6b7280; --faint:#9aa3b0;
+    --rule:#e3e8ef; --bg:#ffffff; --panel:#f7f9fc;
+    --bar:#d6dde8; --bar-hi:#2563eb;
+    --ok:#067647; --ok-bg:#ecfdf3;
+    --warn:#b42318; --warn-bg:#fef3f2;
+    --amber:#b54708; --amber-bg:#fffaeb;
+    --shadow:0 1px 2px rgba(16,24,40,.05), 0 1px 3px rgba(16,24,40,.08);
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{
+    background:var(--bg); color:var(--ink);
+    font:15px/1.55 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    -webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1180px;margin:0 auto;padding:0 16px}
+
+  /* ---------- header ---------- */
+  header{background:var(--ink);color:#fff;padding:22px 0 20px}
+  header .wrap{display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap}
+  header h1{margin:0;font-size:23px;font-weight:700;letter-spacing:-.01em}
+  header p{margin:5px 0 0;color:#98a2b3;font-size:13px}
+  .chip{
+    padding:7px 15px;border-radius:999px;font-size:12.5px;font-weight:700;
+    letter-spacing:.02em;white-space:nowrap;border:1.5px solid;
+  }
+  .chip.idle{color:#98a2b3;border-color:#3a4352;background:#232a35}
+  .chip.ok{color:var(--ok);border-color:var(--ok);background:var(--ok-bg)}
+  .chip.amber{color:var(--amber);border-color:var(--amber);background:var(--amber-bg)}
+  .chip.warn{color:var(--warn);border-color:var(--warn);background:var(--warn-bg)}
+
+  /* ---------- status strip ---------- */
+  #status{
+    background:var(--panel);border-bottom:1px solid var(--rule);
+    padding:11px 0;font-size:13.5px;color:var(--muted);
+  }
+  #status .wrap{display:flex;align-items:center;gap:10px}
+  .dot{width:8px;height:8px;border-radius:50%;background:var(--faint);flex:none}
+  .dot.live{background:var(--ok)}
+  .dot.err{background:var(--warn)}
+  .spin{
+    width:13px;height:13px;border:2px solid var(--rule);border-top-color:var(--bar-hi);
+    border-radius:50%;animation:sp .7s linear infinite;flex:none;
+  }
+  @keyframes sp{to{transform:rotate(360deg)}}
+
+  /* ---------- controls ---------- */
+  .controls{display:flex;gap:10px;flex-wrap:wrap;align-items:center;padding:20px 0 4px}
+  select,button{font:inherit;border-radius:8px;border:1px solid var(--rule);padding:9px 14px;background:#fff;color:var(--ink)}
+  select{min-width:270px;max-width:100%}
+  button{cursor:pointer;font-weight:600;box-shadow:var(--shadow)}
+  button:hover:not(:disabled){background:var(--panel)}
+  button.primary{background:var(--bar-hi);border-color:var(--bar-hi);color:#fff}
+  button.primary:hover:not(:disabled){background:#1d4ed8}
+  button:disabled{opacity:.45;cursor:not-allowed}
+  .hint{font-size:12.5px;color:var(--faint);padding:8px 0 0}
+
+  /* ---------- result grid ---------- */
+  .grid{display:grid;grid-template-columns:1fr 1fr 1.25fr;gap:20px;padding:18px 0 4px}
+  @media (max-width:900px){.grid{grid-template-columns:1fr}}
+  .step{font-size:13.5px;font-weight:650;margin:0 0 8px}
+  .step span{color:var(--faint);font-weight:600}
+  .col{display:flex;flex-direction:column}
+  .colbody{flex:1;display:flex;flex-direction:column;justify-content:center}
+  .frame{
+    width:100%;aspect-ratio:1/1;border:1px solid var(--rule);border-radius:8px;
+    background:var(--panel);display:block;object-fit:contain;
+  }
+  canvas.frame{image-rendering:auto}
+
+  /* ---------- bars ---------- */
+  .bars{display:flex;flex-direction:column;gap:11px;padding-top:2px}
+  .row{display:grid;grid-template-columns:118px 1fr 54px;align-items:center;gap:10px;font-size:13px}
+  .row .nm{color:var(--ink);text-align:right;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .track{height:20px;background:var(--panel);border-radius:4px;position:relative;overflow:hidden}
+  .fill{height:100%;background:var(--bar);border-radius:4px;transition:width .45s cubic-bezier(.22,1,.36,1)}
+  .row.hi .fill{background:var(--bar-hi)}
+  .row.hi .val{font-weight:700;color:var(--ink)}
+  .row.truth .track{box-shadow:inset 0 0 0 1.6px var(--ok)}
+  .row.truth .nm{color:var(--ok);font-weight:700}
+  .row.truth .nm::after{content:" ◀";font-size:10px}
+  .val{color:var(--muted);font-variant-numeric:tabular-nums}
+  .legend{font-size:12px;color:var(--ok);font-weight:650;text-align:right;padding-top:6px}
+
+  /* ---------- verdict cards ---------- */
+  .cards{display:grid;grid-template-columns:1fr 1fr;gap:18px;padding:22px 0 8px}
+  @media (max-width:760px){.cards{grid-template-columns:1fr}}
+  .card{border:1px solid;border-radius:12px;padding:17px 19px}
+  .card .lbl{font-size:11.5px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+  .card .big{font-size:22px;font-weight:700;margin:9px 0 6px;letter-spacing:-.01em}
+  .card .sm{font-size:13.5px;color:var(--ink)}
+  .card.grade{border-color:var(--bar-hi);background:#f4f8ff}
+  .card.grade .big{color:var(--bar-hi)}
+  .card.refer{border-color:var(--warn);background:var(--warn-bg)}
+  .card.refer .big{color:var(--warn)}
+  .card.routine{border-color:var(--ok);background:var(--ok-bg)}
+  .card.routine .big{color:var(--ok)}
+
+  /* ---------- misc ---------- */
+  .meta{font:12.5px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--faint);padding:2px 0 0}
+  details{border-top:1px solid var(--rule);margin-top:26px;padding-top:16px}
+  summary{cursor:pointer;font-weight:650;font-size:14px}
+  details .body{font-size:13.5px;color:var(--muted);padding-top:10px;max-width:800px}
+  details code{background:var(--panel);padding:1px 5px;border-radius:4px;font-size:12.5px}
+  footer{background:var(--panel);border-top:1px solid var(--rule);margin-top:34px;padding:16px 0;
+         font-size:12.5px;color:#475467;text-align:center}
+  .banner{display:none;background:var(--amber-bg);border:1px solid var(--amber);color:var(--amber);
+          border-radius:10px;padding:12px 15px;font-size:13.5px;margin:18px 0 0}
+  .banner.show{display:block}
+  #drop.over{outline:2px dashed var(--bar-hi);outline-offset:4px}
+</style>
+</head>
+<body id="drop">
+
+<header>
+  <div class="wrap">
+    <div>
+      <h1>Diabetic Retinopathy Stage Detection</h1>
+      <p>ResNet50 transfer learning &nbsp;·&nbsp; APTOS 2019 &nbsp;·&nbsp; five-grade clinical severity scale</p>
+    </div>
+    <div class="chip idle" id="chip">READY</div>
+  </div>
+</header>
+
+<div id="status">
+  <div class="wrap">
+    <span class="spin" id="spin"></span>
+    <span class="dot" id="dot" style="display:none"></span>
+    <span id="statustext">Loading OpenCV and TensorFlow.js…</span>
+  </div>
+</div>
+
+<main class="wrap">
+
+  <div class="banner" id="banner"></div>
+
+  <div class="controls">
+    <select id="cases" disabled><option>Loading sample cases…</option></select>
+    <button class="primary" id="run" disabled>Classify</button>
+    <button id="rand" disabled>Random case</button>
+    <button id="pick">Upload your own image</button>
+    <input type="file" id="file" accept="image/*" hidden>
+  </div>
+  <div class="hint">Images are processed entirely in your browser. Nothing is uploaded to any server.</div>
+
+  <div class="grid">
+    <div>
+      <p class="step"><span>1.</span> Original fundus photograph</p>
+      <canvas class="frame" id="cOrig" width="420" height="420"></canvas>
+    </div>
+    <div>
+      <p class="step"><span>2.</span> After preprocessing (Section 2.1)</p>
+      <canvas class="frame" id="cProc" width="420" height="420"></canvas>
+    </div>
+    <div class="col">
+      <p class="step"><span>3.</span> Probability across all five grades</p>
+      <div class="colbody">
+        <div class="bars" id="bars"></div>
+        <div class="legend" id="legend" style="visibility:hidden">◀ outlined row = clinician grade</div>
+        <div class="meta" id="meta"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="cards">
+    <div class="card grade">
+      <div class="lbl">Predicted severity grade</div>
+      <div class="big" id="gradeBig">—</div>
+      <div class="sm" id="gradeSm">Select a case and press Classify.</div>
+    </div>
+    <div class="card routine" id="referCard">
+      <div class="lbl">Referable disease (grades 2–4, Section 6.3)</div>
+      <div class="big" id="referBig">—</div>
+      <div class="sm" id="referSm">Grades 2, 3 and 4 summed against a 50% threshold.</div>
+    </div>
+  </div>
+
+  <details>
+    <summary>How this page works</summary>
+    <div class="body">
+      <p>The trained Keras model was converted to TensorFlow.js and is served from this
+      repository. When you press Classify, the image is preprocessed with OpenCV.js using the
+      same operations as the training pipeline — retinal crop, 3×3 median filter, CLAHE on the
+      L channel of LAB (clip 2.0, 8×8 tiles), Ben Graham background subtraction (σ = 10), grey
+      padding to a square and resize to 224×224 — then passed through the network. Inference
+      runs on your own device via WebGL; no image ever leaves your browser.</p>
+      <p>Held-out test set (n = 519): accuracy 0.7341, quadratic weighted kappa 0.7783,
+      referable-disease ROC AUC 0.958. Model weights are stored in <code>docs/model/</code>.</p>
+    </div>
+  </details>
+
+</main>
+
+<footer>
+  Decision support only — not a diagnosis. Screening aid trained on APTOS 2019; clinical
+  responsibility remains with a qualified practitioner. Not validated on locally acquired images.
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@4.22.0/dist/tf.min.js"
+        onerror="var s=document.createElement('script');
+                 s.src='https://unpkg.com/@tensorflow/tfjs@4.22.0/dist/tf.min.js';
+                 document.head.appendChild(s);"></script>
+<script>
+/* =======================================================================
+   Diabetic Retinopathy Stage Detection — browser demo
+   H. A. C. P. Ranasinghe | Coventry 16110083 | NIBM CoBscComp24.2-030
+   ======================================================================= */
+
+const CLASS_NAMES = ['No DR','Mild NPDR','Moderate NPDR','Severe NPDR','Proliferative DR'];
+const REFERABLE    = [2,3,4];
+const THRESHOLD    = 0.5;
+const IMG_SIZE     = 224;
+
+const el = id => document.getElementById(id);
+let cvReady = false, model = null, cases = [], busy = false;
+
+/* ---------------------------------------------------------------- status */
+function status(text, state){                 // state: 'load' | 'live' | 'err'
+  el('statustext').textContent = text;
+  el('spin').style.display = state === 'load' ? '' : 'none';
+  const d = el('dot');
+  d.style.display = state === 'load' ? 'none' : '';
+  d.className = 'dot' + (state === 'live' ? ' live' : state === 'err' ? ' err' : '');
+}
+function banner(html){
+  const b = el('banner');
+  if(!html){ b.classList.remove('show'); return; }
+  b.innerHTML = html; b.classList.add('show');
+}
+function chip(text, cls){ el('chip').textContent = text; el('chip').className = 'chip ' + cls; }
+
+/* ---------------------------------------------------------------- OpenCV */
+// OpenCV.js is large, so it is fetched after the page is interactive.
+// Several sources are tried in turn, because a single CDN going down should
+// not take the demo with it.
+const CV_SOURCES = [
+  'https://docs.opencv.org/4.x/opencv.js',
+  'https://cdn.jsdelivr.net/npm/@techstark/opencv-js/dist/opencv.js',
+  'https://cdn.jsdelivr.net/npm/opencv.js@1.2.1/opencv.js'
+];
+
+function loadOpenCVFrom(url, timeoutMs){
+  return new Promise((resolve, reject) => {
+    let settled = false;
+    const done = err => {
+      if(settled) return;
+      settled = true;
+      err ? reject(err) : resolve();
+    };
+    const timer = setTimeout(() => done(new Error('timed out')), timeoutMs);
+    const ready = () => { clearTimeout(timer); cvReady = true; done(null); };
+
+    const s = document.createElement('script');
+    s.src = url;
+    s.async = true;
+    s.onerror = () => { clearTimeout(timer); done(new Error('download failed')); };
+    s.onload  = () => {
+      // Different builds signal readiness differently: a promise, an already
+      // initialised module, or the classic onRuntimeInitialized callback.
+      if(typeof cv === 'undefined')          { clearTimeout(timer); done(new Error('no cv global')); }
+      else if(typeof cv.then === 'function') { cv.then(m => { window.cv = m; ready(); }, () => done(new Error('init failed'))); }
+      else if(cv.Mat)                          ready();
+      else                                     cv.onRuntimeInitialized = ready;
+    };
+    document.head.appendChild(s);
+  });
+}
+
+async function loadOpenCV(){
+  let last = null;
+  for(const url of CV_SOURCES){
+    try{
+      status(`Downloading OpenCV.js (about 9 MB, once) from ${new URL(url).hostname} …`, 'load');
+      await loadOpenCVFrom(url, 60000);
+      console.log('OpenCV.js loaded from', url);
+      return;
+    }catch(e){
+      console.warn('OpenCV.js source failed:', url, e.message);
+      last = e;
+    }
+  }
+  throw last || new Error('no OpenCV source available');
+}
+
+/* ------------------------------------------------- preprocessing (§ 2.1) */
+function cropRetina(src, tol){
+  // Trim the black surround so the retinal disc fills the frame.
+  const gray = new cv.Mat(), bin = new cv.Mat();
+  cv.cvtColor(src, gray, cv.COLOR_RGB2GRAY);
+  cv.threshold(gray, bin, tol, 255, cv.THRESH_BINARY);
+  let out;
+  try{
+    const r = cv.boundingRect(bin);                 // non-zero pixels of a grey image
+    out = (r.width > 8 && r.height > 8) ? src.roi(r).clone() : src.clone();
+  }catch(e){
+    out = src.clone();                              // defensive: keep the whole frame
+  }
+  gray.delete(); bin.delete();
+  return out;
+}
+
+function padToSquare(src, value){
+  const h = src.rows, w = src.cols, s = Math.max(h, w);
+  const top = (s - h) >> 1, left = (s - w) >> 1;
+  const out = new cv.Mat();
+  cv.copyMakeBorder(src, out, top, s - h - top, left, s - w - left,
+                    cv.BORDER_CONSTANT, new cv.Scalar(value, value, value, 255));
+  return out;
+}
+
+function makeCLAHE(){
+  const size = new cv.Size(8, 8);
+  if(typeof cv.createCLAHE === 'function') return cv.createCLAHE(2.0, size);
+  return new cv.CLAHE(2.0, size);
+}
+
+function preprocess(rgb){
+  const cropped = cropRetina(rgb, 7);                       // 1. retinal crop
+
+  const med = new cv.Mat();
+  cv.medianBlur(cropped, med, 3);                           // 2. median filter
+  cropped.delete();
+
+  const lab = new cv.Mat(), planes = new cv.MatVector();    // 3. CLAHE on L only
+  cv.cvtColor(med, lab, cv.COLOR_RGB2Lab);
+  med.delete();
+  cv.split(lab, planes);
+  const L = planes.get(0);
+  const clahe = makeCLAHE();
+  clahe.apply(L, L);
+  if(clahe.delete) clahe.delete();
+  const merged = new cv.Mat();
+  cv.merge(planes, merged);
+  const eq = new cv.Mat();
+  cv.cvtColor(merged, eq, cv.COLOR_Lab2RGB);
+  lab.delete(); planes.delete(); merged.delete();
+
+  const blur = new cv.Mat(), ben = new cv.Mat();            // 4. Ben Graham
+  cv.GaussianBlur(eq, blur, new cv.Size(0, 0), 10);
+  cv.addWeighted(eq, 4, blur, -4, 128, ben);
+  eq.delete(); blur.delete();
+
+  const sq = padToSquare(ben, 128);                         // 5. grey pad
+  ben.delete();
+
+  const out = new cv.Mat();                                 // 6. resize
+  cv.resize(sq, out, new cv.Size(IMG_SIZE, IMG_SIZE), 0, 0, cv.INTER_AREA);
+  sq.delete();
+  return out;
+}
+
+/* ------------------------------------------------------------- inference */
+function matToTensor(mat){
+  // mat is CV_8UC3, values 0-255, matching how the model was trained.
+  const n = IMG_SIZE * IMG_SIZE * 3;
+  const buf = new Float32Array(n);
+  for(let i = 0; i < n; i++) buf[i] = mat.data[i];
+  return tf.tensor4d(buf, [1, IMG_SIZE, IMG_SIZE, 3]);
+}
+
+async function predict(mat){
+  const x = matToTensor(mat);
+  const y = model.predict(x);
+  const probs = Array.from(await y.data());
+  x.dispose(); y.dispose();
+  return probs;
+}
+
+/* ----------------------------------------------------------------- paint */
+function drawMat(canvasId, mat){
+  const c = el(canvasId);
+  const tmp = new cv.Mat();
+  cv.resize(mat, tmp, new cv.Size(c.width, c.height), 0, 0, cv.INTER_AREA);
+  cv.imshow(canvasId, tmp);
+  tmp.delete();
+}
+
+function paintBars(probs, pred, truth){
+  const host = el('bars');
+  host.innerHTML = '';
+  probs.forEach((p, i) => {
+    const row = document.createElement('div');
+    row.className = 'row' + (i === pred ? ' hi' : '') +
+                    (truth !== null && i === truth && truth !== pred ? ' truth' : '');
+    row.innerHTML =
+      `<div class="nm">${CLASS_NAMES[i]}</div>` +
+      `<div class="track"><div class="fill" style="width:0%"></div></div>` +
+      `<div class="val">${(p * 100).toFixed(1)}%</div>`;
+    host.appendChild(row);
+    requestAnimationFrame(() => {
+      row.querySelector('.fill').style.width = Math.max(p * 100, 0.6) + '%';
+    });
+  });
+  el('legend').style.visibility =
+    (truth !== null && truth !== pred) ? 'visible' : 'hidden';
+}
+
+function paintVerdict(probs, pred, truth, name){
+  const pRef  = REFERABLE.reduce((s, i) => s + probs[i], 0);
+  const refer = pRef >= THRESHOLD;
+
+  el('gradeBig').textContent = `Grade ${pred} — ${CLASS_NAMES[pred]}`;
+  el('gradeSm').textContent  =
+    `Model confidence in this grade: ${(probs[pred] * 100).toFixed(1)}%`;
+
+  const card = el('referCard');
+  card.className = 'card ' + (refer ? 'refer' : 'routine');
+  el('referBig').textContent = `${(pRef * 100).toFixed(1)}% — ` +
+                               (refer ? 'REFER' : 'ROUTINE RECALL');
+  el('referSm').textContent  = refer
+    ? 'Refer to an ophthalmologist.'
+    : 'Referable disease unlikely at this threshold.';
+
+  if(truth === null)      chip('UNLABELLED', 'idle');
+  else if(truth === pred) chip('CORRECT', 'ok');
+  else{
+    const d = pred - truth;
+    chip(`${d < 0 ? 'UNDER' : 'OVER'}-GRADED BY ${Math.abs(d)}`, 'amber');
+  }
+
+  el('meta').textContent = name + (truth === null ? '' : `   ·   true grade ${truth}`);
+}
+
+/* ------------------------------------------------------------------- run */
+async function analyse(src, name, truth){
+  if(busy) return;
+  busy = true;
+  el('run').disabled = el('rand').disabled = true;
+  status('Preprocessing and classifying…', 'load');
+
+  await new Promise(r => setTimeout(r, 30));          // let the browser repaint
+  const t0 = performance.now();
+
+  const rgba = cv.imread(src);
+  const rgb  = new cv.Mat();
+  cv.cvtColor(rgba, rgb, cv.COLOR_RGBA2RGB);
+  rgba.delete();
+
+  const proc = preprocess(rgb);
+  drawMat('cOrig', rgb);
+  drawMat('cProc', proc);
+  rgb.delete();
+
+  const probs = await predict(proc);
+  proc.delete();
+
+  const pred = probs.indexOf(Math.max(...probs));
+  paintBars(probs, pred, truth);
+  paintVerdict(probs, pred, truth, name);
+
+  status(`Classified in ${((performance.now() - t0) / 1000).toFixed(2)} s — ` +
+         `running locally in your browser.`, 'live');
+  busy = false;
+  el('run').disabled = el('rand').disabled = cases.length === 0;
+}
+
+function loadImage(url){
+  return new Promise((res, rej) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload  = () => res(img);
+    img.onerror = () => rej(new Error('could not load ' + url));
+    img.src = url;
+  });
+}
+
+async function runSelected(){
+  const c = cases[el('cases').selectedIndex];
+  if(!c) return;
+  try{
+    const img = await loadImage('samples/' + c.file);
+    await analyse(img, c.file, c.grade === undefined ? null : c.grade);
+  }catch(e){
+    status('Could not load ' + c.file + ' — check docs/samples/.', 'err');
+  }
+}
+
+/* ----------------------------------------------------------------- setup */
+async function loadCases(){
+  try{
+    const r = await fetch('samples/manifest.json', {cache: 'no-store'});
+    if(!r.ok) throw new Error('no manifest');
+    cases = await r.json();
+  }catch(e){ cases = []; }
+
+  const sel = el('cases');
+  sel.innerHTML = '';
+  if(cases.length === 0){
+    sel.innerHTML = '<option>No sample images bundled</option>';
+    sel.disabled = true;
+    return false;
+  }
+  cases.forEach(c => {
+    const o = document.createElement('option');
+    o.textContent = (c.grade === undefined)
+      ? c.file
+      : `Grade ${c.grade} — ${CLASS_NAMES[c.grade]}  (${c.file.replace(/\.[^.]+$/, '')})`;
+    sel.appendChild(o);
+  });
+  sel.disabled = false;
+  return true;
+}
+
+async function boot(){
+  try{
+    await loadOpenCV();
+  }catch(e){
+    status('OpenCV.js failed to load — check your connection and refresh.', 'err');
+    banner('<b>OpenCV.js did not load.</b> The page needs it for preprocessing. ' +
+           'Refresh, or check that the CDN is reachable from your network.');
+    return;
+  }
+
+  const haveCases = await loadCases();
+
+  // The fallback CDN is appended asynchronously, so give it a moment to arrive.
+  for(let i = 0; i < 40 && typeof tf === 'undefined'; i++){
+    await new Promise(r => setTimeout(r, 250));
+  }
+  if(typeof tf === 'undefined'){
+    status('TensorFlow.js failed to load — check your connection and refresh.', 'err');
+    banner('<b>TensorFlow.js did not load.</b> The page needs it to run the network. ' +
+           'Refresh the page, or try a different network.');
+    return;
+  }
+
+  try{
+    status('Loading the trained model…', 'load');
+    model = await tf.loadLayersModel('model/model.json');
+    // A warm-up pass so the first real click is fast.
+    const warm = tf.zeros([1, IMG_SIZE, IMG_SIZE, 3]);
+    const w = model.predict(warm); await w.data(); warm.dispose(); w.dispose();
+    status('Model loaded and running locally in your browser. Ready.', 'live');
+    el('run').disabled = el('rand').disabled = !haveCases;
+  }catch(e){
+    status('Model files not found in docs/model/.', 'err');
+    banner('<b>The model has not been published yet.</b> ' +
+           'Convert <code>final_model.keras</code> with <code>convert_model.py</code> and ' +
+           'commit the result to <code>docs/model/</code>. The page will then classify ' +
+           'images live. Everything else on this page already works.');
+    el('run').disabled = el('rand').disabled = true;
+  }
+}
+
+/* --------------------------------------------------------------- wiring */
+el('run').addEventListener('click', runSelected);
+el('rand').addEventListener('click', () => {
+  if(cases.length === 0) return;
+  el('cases').selectedIndex = Math.floor(Math.random() * cases.length);
+  runSelected();
+});
+el('pick').addEventListener('click', () => el('file').click());
+el('file').addEventListener('change', async ev => {
+  const f = ev.target.files[0];
+  if(!f) return;
+  if(!model){ status('The model is not loaded, so uploads cannot be classified.', 'err'); return; }
+  const img = await loadImage(URL.createObjectURL(f));
+  await analyse(img, f.name, null);
+});
+
+// drag and drop anywhere on the page
+const drop = el('drop');
+['dragenter','dragover'].forEach(k => drop.addEventListener(k, e => {
+  e.preventDefault(); drop.classList.add('over');
+}));
+['dragleave','drop'].forEach(k => drop.addEventListener(k, e => {
+  e.preventDefault(); drop.classList.remove('over');
+}));
+drop.addEventListener('drop', async e => {
+  const f = e.dataTransfer.files[0];
+  if(!f || !model) return;
+  const img = await loadImage(URL.createObjectURL(f));
+  await analyse(img, f.name, null);
+});
+
+// empty bars until the first classification
+paintBars([0,0,0,0,0], -1, null);
+boot();
+</script>
+</body>
+</html>
